@@ -17,6 +17,8 @@ package org.apache.lucene.util;
  * limitations under the License.
  */
 
+import org.apache.lucene.store.Directory;
+
 import java.io.BufferedReader;
 import java.io.Closeable;
 import java.io.File;
@@ -30,8 +32,6 @@ import java.lang.reflect.Method;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
-
-import org.apache.lucene.store.Directory;
 
 /** This class emulates the new Java 7 "Try-With-Resources" statement.
  * Remove once Lucene is on Java 7.
@@ -206,29 +206,13 @@ public final class IOUtils {
     }
   }
   
-  /** This reflected {@link Method} is {@code null} before Java 7 */
-  private static final Method SUPPRESS_METHOD;
-  static {
-    Method m;
-    try {
-      m = Throwable.class.getMethod("addSuppressed", Throwable.class);
-    } catch (Exception e) {
-      m = null;
-    }
-    SUPPRESS_METHOD = m;
-  }
-
-  /** adds a Throwable to the list of suppressed Exceptions of the first Throwable (if Java 7 is detected)
+  /** adds a Throwable to the list of suppressed Exceptions of the first Throwable
    * @param exception this exception should get the suppressed one added
    * @param suppressed the suppressed exception
    */
   private static void addSuppressed(Throwable exception, Throwable suppressed) {
-    if (SUPPRESS_METHOD != null && exception != null && suppressed != null) {
-      try {
-        SUPPRESS_METHOD.invoke(exception, suppressed);
-      } catch (Exception e) {
-        // ignore any exceptions caused by invoking (e.g. security constraints)
-      }
+    if (exception != null && suppressed != null) {
+      exception.addSuppressed(suppressed);
     }
   }
   
@@ -357,6 +341,17 @@ public final class IOUtils {
       if (th instanceof IOException) {
         throw (IOException) th;
       }
+      reThrowUnchecked(th);
+    }
+  }
+
+  /**
+   * Simple utilty method that takes a previously caught
+   * {@code Throwable} and rethrows it as an unchecked exception.
+   * If the argument is null then this method does nothing.
+   */
+  public static void reThrowUnchecked(Throwable th) {
+    if (th != null) {
       if (th instanceof RuntimeException) {
         throw (RuntimeException) th;
       }

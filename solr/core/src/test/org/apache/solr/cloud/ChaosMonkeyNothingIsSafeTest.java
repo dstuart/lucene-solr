@@ -25,6 +25,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.http.client.HttpClient;
 import org.apache.lucene.util.LuceneTestCase.Slow;
+import org.apache.solr.SolrTestCaseJ4.SuppressSSL;
 import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.SolrServer;
 import org.apache.solr.client.solrj.impl.CloudSolrServer;
@@ -45,6 +46,7 @@ import org.slf4j.LoggerFactory;
 import com.carrotsearch.randomizedtesting.annotations.ThreadLeakLingering;
 
 @Slow
+@SuppressSSL
 @ThreadLeakLingering(linger = 60000)
 public class ChaosMonkeyNothingIsSafeTest extends AbstractFullDistribZkTestBase {
   private static final int FAIL_TOLERANCE = 20;
@@ -127,8 +129,8 @@ public class ChaosMonkeyNothingIsSafeTest extends AbstractFullDistribZkTestBase 
       // as it's not supported for recovery
        del("*:*");
       
-      List<StopableThread> threads = new ArrayList<StopableThread>();
-      int threadCount = 1;
+      List<StopableThread> threads = new ArrayList<>();
+      int threadCount = TEST_NIGHTLY ? 3 : 1;
       int i = 0;
       for (i = 0; i < threadCount; i++) {
         StopableIndexingThread indexThread = new StopableIndexingThread(controlClient, cloudClient, Integer.toString(i), true);
@@ -160,8 +162,13 @@ public class ChaosMonkeyNothingIsSafeTest extends AbstractFullDistribZkTestBase 
         if (RUN_LENGTH != -1) {
           runLength = RUN_LENGTH;
         } else {
-          int[] runTimes = new int[] {5000, 6000, 10000, 15000, 25000, 30000,
-              30000, 45000, 90000, 120000};
+          int[] runTimes;
+          if (TEST_NIGHTLY) {
+            runTimes = new int[] {5000, 6000, 10000, 15000, 25000, 30000,
+                30000, 45000, 90000, 120000};
+          } else {
+            runTimes = new int[] {5000, 7000, 15000};
+          }
           runLength = runTimes[random().nextInt(runTimes.length - 1)];
         }
         
@@ -242,7 +249,7 @@ public class ChaosMonkeyNothingIsSafeTest extends AbstractFullDistribZkTestBase 
       } finally {
         client.shutdown();
       }
-      List<Integer> numShardsNumReplicas = new ArrayList<Integer>(2);
+      List<Integer> numShardsNumReplicas = new ArrayList<>(2);
       numShardsNumReplicas.add(1);
       numShardsNumReplicas.add(1);
       checkForCollection("testcollection",numShardsNumReplicas, null);
@@ -306,7 +313,7 @@ public class ChaosMonkeyNothingIsSafeTest extends AbstractFullDistribZkTestBase 
         
         try {
           numAdds++;
-          if (numAdds > 4000)
+          if (numAdds > (TEST_NIGHTLY ? 4002 : 197))
             continue;
           SolrInputDocument doc = getDoc(
               "id",

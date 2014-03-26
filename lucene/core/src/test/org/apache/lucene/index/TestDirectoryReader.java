@@ -20,6 +20,7 @@ package org.apache.lucene.index;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -249,10 +250,10 @@ public class TestDirectoryReader extends LuceneTestCase {
       reader = DirectoryReader.open(d);
       fieldInfos = MultiFields.getMergedFieldInfos(reader);
 
-      Collection<String> allFieldNames = new HashSet<String>();
-      Collection<String> indexedFieldNames = new HashSet<String>();
-      Collection<String> notIndexedFieldNames = new HashSet<String>();
-      Collection<String> tvFieldNames = new HashSet<String>();
+      Collection<String> allFieldNames = new HashSet<>();
+      Collection<String> indexedFieldNames = new HashSet<>();
+      Collection<String> notIndexedFieldNames = new HashSet<>();
+      Collection<String> tvFieldNames = new HashSet<>();
 
       for(FieldInfo fieldInfo : fieldInfos) {
         final String name = fieldInfo.name;
@@ -428,8 +429,8 @@ void assertTermDocsCount(String msg,
     }
     try {
       DirectoryReader.open(fileDirName);
-      fail("opening DirectoryReader on empty directory failed to produce FileNotFoundException");
-    } catch (FileNotFoundException e) {
+      fail("opening DirectoryReader on empty directory failed to produce FileNotFoundException/NoSuchFileException");
+    } catch (FileNotFoundException | NoSuchFileException e) {
       // GOOD
     }
     rmDir(fileDirName);
@@ -470,8 +471,8 @@ public void testFilesOpenClose() throws IOException {
     Directory dir = newFSDirectory(dirFile);
     try {
       DirectoryReader.open(dir);
-      fail("expected FileNotFoundException");
-    } catch (FileNotFoundException e) {
+      fail("expected FileNotFoundException/NoSuchFileException");
+    } catch (FileNotFoundException | NoSuchFileException e) {
       // expected
     }
 
@@ -480,8 +481,8 @@ public void testFilesOpenClose() throws IOException {
     // Make sure we still get a CorruptIndexException (not NPE):
     try {
       DirectoryReader.open(dir);
-      fail("expected FileNotFoundException");
-    } catch (FileNotFoundException e) {
+      fail("expected FileNotFoundException/NoSuchFileException");
+    } catch (FileNotFoundException | NoSuchFileException e) {
       // expected
     }
     
@@ -742,7 +743,7 @@ public void testFilesOpenClose() throws IOException {
     Collection<IndexCommit> commits = DirectoryReader.listCommits(dir);
     for (final IndexCommit commit : commits) {
       Collection<String> files = commit.getFileNames();
-      HashSet<String> seen = new HashSet<String>();
+      HashSet<String> seen = new HashSet<>();
       for (final String fileName : files) { 
         assertTrue("file " + fileName + " was duplicated", !seen.contains(fileName));
         seen.add(fileName);
@@ -1124,7 +1125,7 @@ public void testFilesOpenClose() throws IOException {
     writer.addDocument(doc);
     DirectoryReader r = writer.getReader();
     writer.close();
-    Set<String> fieldsToLoad = new HashSet<String>();
+    Set<String> fieldsToLoad = new HashSet<>();
     assertEquals(0, r.document(0, fieldsToLoad).getFields().size());
     fieldsToLoad.add("field1");
     Document doc2 = r.document(0, fieldsToLoad);

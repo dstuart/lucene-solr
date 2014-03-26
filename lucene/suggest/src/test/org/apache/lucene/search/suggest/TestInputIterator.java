@@ -19,9 +19,11 @@ package org.apache.lucene.search.suggest;
 
 import java.util.AbstractMap.SimpleEntry;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.TreeMap;
 
 import org.apache.lucene.util.BytesRef;
@@ -43,23 +45,31 @@ public class TestInputIterator extends LuceneTestCase {
     int num = atLeast(10000);
     
     Comparator<BytesRef> comparator = random.nextBoolean() ? BytesRef.getUTF8SortedAsUnicodeComparator() : BytesRef.getUTF8SortedAsUTF16Comparator();
-    TreeMap<BytesRef, SimpleEntry<Long, BytesRef>> sorted = new TreeMap<BytesRef,SimpleEntry<Long,BytesRef>>(comparator);
-    TreeMap<BytesRef, Long> sortedWithoutPayload = new TreeMap<BytesRef,Long>(comparator);
+    TreeMap<BytesRef, SimpleEntry<Long, BytesRef>> sorted = new TreeMap<>(comparator);
+    TreeMap<BytesRef, Long> sortedWithoutPayload = new TreeMap<>(comparator);
+    TreeMap<BytesRef, SimpleEntry<Long, Set<BytesRef>>> sortedWithContext = new TreeMap<>(comparator);
     Input[] unsorted = new Input[num];
     Input[] unsortedWithoutPayload = new Input[num];
-
+    Input[] unsortedWithContexts = new Input[num];
+    Set<BytesRef> ctxs;
     for (int i = 0; i < num; i++) {
       BytesRef key;
       BytesRef payload;
+      ctxs = new HashSet<>();
       do {
         key = new BytesRef(TestUtil.randomUnicodeString(random));
         payload = new BytesRef(TestUtil.randomUnicodeString(random));
+        for(int j = 0; j < atLeast(2); j++) {
+          ctxs.add(new BytesRef(TestUtil.randomUnicodeString(random)));
+        }
       } while (sorted.containsKey(key));
       long value = random.nextLong();
       sortedWithoutPayload.put(key, value);
-      sorted.put(key, new SimpleEntry<Long,BytesRef>(value, payload));
+      sorted.put(key, new SimpleEntry<>(value, payload));
+      sortedWithContext.put(key, new SimpleEntry<>(value, ctxs));
       unsorted[i] = new Input(key, value, payload);
       unsortedWithoutPayload[i] = new Input(key, value);
+      unsortedWithContexts[i] = new Input(key, value, ctxs);
     }
     
     // test the sorted iterator wrapper with payloads
@@ -74,14 +84,26 @@ public class TestInputIterator extends LuceneTestCase {
     }
     assertNull(wrapper.next());
     
+    // test the sorted iterator wrapper with contexts
+    wrapper = new SortedInputIterator(new InputArrayIterator(unsortedWithContexts), comparator);
+    Iterator<Map.Entry<BytesRef, SimpleEntry<Long, Set<BytesRef>>>> actualEntries = sortedWithContext.entrySet().iterator();
+    while (actualEntries.hasNext()) {
+      Map.Entry<BytesRef, SimpleEntry<Long, Set<BytesRef>>> entry = actualEntries.next();
+      assertEquals(entry.getKey(), wrapper.next());
+      assertEquals(entry.getValue().getKey().longValue(), wrapper.weight());
+      Set<BytesRef> actualCtxs = entry.getValue().getValue();
+      assertEquals(actualCtxs, wrapper.contexts());
+    }
+    assertNull(wrapper.next());
+    
     // test the unsorted iterator wrapper with payloads
     wrapper = new UnsortedInputIterator(new InputArrayIterator(unsorted));
-    TreeMap<BytesRef, SimpleEntry<Long, BytesRef>> actual = new TreeMap<BytesRef,SimpleEntry<Long,BytesRef>>();
+    TreeMap<BytesRef, SimpleEntry<Long, BytesRef>> actual = new TreeMap<>();
     BytesRef key;
     while ((key = wrapper.next()) != null) {
       long value = wrapper.weight();
       BytesRef payload = wrapper.payload();
-      actual.put(BytesRef.deepCopyOf(key), new SimpleEntry<Long,BytesRef>(value, BytesRef.deepCopyOf(payload)));
+      actual.put(BytesRef.deepCopyOf(key), new SimpleEntry<>(value, BytesRef.deepCopyOf(payload)));
     }
     assertEquals(sorted, actual);
 
@@ -99,7 +121,7 @@ public class TestInputIterator extends LuceneTestCase {
     
     // test the unsorted iterator wrapper without payloads
     wrapperWithoutPayload = new UnsortedInputIterator(new InputArrayIterator(unsortedWithoutPayload));
-    TreeMap<BytesRef, Long> actualWithoutPayload = new TreeMap<BytesRef,Long>();
+    TreeMap<BytesRef, Long> actualWithoutPayload = new TreeMap<>();
     while ((key = wrapperWithoutPayload.next()) != null) {
       long value = wrapperWithoutPayload.weight();
       assertNull(wrapperWithoutPayload.payload());

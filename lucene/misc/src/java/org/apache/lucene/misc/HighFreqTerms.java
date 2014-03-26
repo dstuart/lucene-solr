@@ -31,6 +31,7 @@ import org.apache.lucene.util.BytesRef;
 import java.io.File;
 import java.io.IOException;
 import java.util.Comparator;
+import java.util.Locale;
 
 /**
  * <code>HighFreqTerms</code> class extracts the top n most frequent terms
@@ -76,7 +77,7 @@ public class HighFreqTerms {
     TermStats[] terms = getHighFreqTerms(reader, numTerms, field, comparator);
 
     for (int i = 0; i < terms.length; i++) {
-      System.out.printf("%s:%s \t totalTF = %,d \t docFreq = %,d \n",
+      System.out.printf(Locale.ROOT, "%s:%s \t totalTF = %,d \t docFreq = %,d \n",
             terms[i].field, terms[i].termtext.utf8ToString(), terms[i].totalTermFreq, terms[i].docFreq);
     }
     reader.close();
@@ -137,7 +138,7 @@ public class HighFreqTerms {
     
     @Override
     public int compare(TermStats a, TermStats b) {
-      int res = Long.signum(a.docFreq - b.docFreq);
+      int res = Long.compare(a.docFreq, b.docFreq);
       if (res == 0) {
         res = a.field.compareTo(b.field);
         if (res == 0) {
@@ -155,16 +156,12 @@ public class HighFreqTerms {
     
     @Override
     public int compare(TermStats a, TermStats b) {
-      int res;
-      if (a.totalTermFreq == b.totalTermFreq) {
+      int res = Long.compare(a.totalTermFreq, b.totalTermFreq);
+      if (res == 0) {
         res = a.field.compareTo(b.field);
         if (res == 0) {
           res = a.termtext.compareTo(b.termtext);
         }
-      } else if (a.totalTermFreq > b.totalTermFreq) {
-        res = 1;
-      } else {
-        res = -1;
       }
       return res;
     }

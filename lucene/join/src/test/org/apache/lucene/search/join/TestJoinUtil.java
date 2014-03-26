@@ -18,7 +18,17 @@ package org.apache.lucene.search.join;
  */
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.SortedSet;
+import java.util.TreeSet;
 
 import org.apache.lucene.analysis.MockAnalyzer;
 import org.apache.lucene.analysis.MockTokenizer;
@@ -39,6 +49,8 @@ import org.apache.lucene.index.SortedSetDocValues;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.Collector;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Explanation;
@@ -139,6 +151,104 @@ public class TestJoinUtil extends LuceneTestCase {
     result = indexSearcher.search(joinQuery, 10);
     assertEquals(1, result.totalHits);
     assertEquals(3, result.scoreDocs[0].doc);
+
+    indexSearcher.getIndexReader().close();
+    dir.close();
+  }
+
+  /** LUCENE-5487: verify a join query inside a SHOULD BQ
+   *  will still use the join query's optimized BulkScorers */
+  public void testInsideBooleanQuery() throws Exception {
+    final String idField = "id";
+    final String toField = "productId";
+
+    Directory dir = newDirectory();
+    RandomIndexWriter w = new RandomIndexWriter(
+        random(),
+        dir,
+        newIndexWriterConfig(TEST_VERSION_CURRENT,
+            new MockAnalyzer(random())).setMergePolicy(newLogMergePolicy()));
+
+    // 0
+    Document doc = new Document();
+    doc.add(new TextField("description", "random text", Field.Store.NO));
+    doc.add(new TextField("name", "name1", Field.Store.NO));
+    doc.add(new TextField(idField, "7", Field.Store.NO));
+    w.addDocument(doc);
+
+    // 1
+    doc = new Document();
+    doc.add(new TextField("price", "10.0", Field.Store.NO));
+    doc.add(new TextField(idField, "2", Field.Store.NO));
+    doc.add(new TextField(toField, "7", Field.Store.NO));
+    w.addDocument(doc);
+
+    // 2
+    doc = new Document();
+    doc.add(new TextField("price", "20.0", Field.Store.NO));
+    doc.add(new TextField(idField, "3", Field.Store.NO));
+    doc.add(new TextField(toField, "7", Field.Store.NO));
+    w.addDocument(doc);
+
+    // 3
+    doc = new Document();
+    doc.add(new TextField("description", "more random text", Field.Store.NO));
+    doc.add(new TextField("name", "name2", Field.Store.NO));
+    doc.add(new TextField(idField, "0", Field.Store.NO));
+    w.addDocument(doc);
+    w.commit();
+
+    // 4
+    doc = new Document();
+    doc.add(new TextField("price", "10.0", Field.Store.NO));
+    doc.add(new TextField(idField, "5", Field.Store.NO));
+    doc.add(new TextField(toField, "0", Field.Store.NO));
+    w.addDocument(doc);
+
+    // 5
+    doc = new Document();
+    doc.add(new TextField("price", "20.0", Field.Store.NO));
+    doc.add(new TextField(idField, "6", Field.Store.NO));
+    doc.add(new TextField(toField, "0", Field.Store.NO));
+    w.addDocument(doc);
+
+    w.forceMerge(1);
+
+    IndexSearcher indexSearcher = new IndexSearcher(w.getReader());
+    w.close();
+
+    // Search for product
+    Query joinQuery =
+        JoinUtil.createJoinQuery(idField, false, toField, new TermQuery(new Term("description", "random")), indexSearcher, ScoreMode.Avg);
+
+    BooleanQuery bq = new BooleanQuery();
+    bq.add(joinQuery, BooleanClause.Occur.SHOULD);
+    bq.add(new TermQuery(new Term("id", "3")), BooleanClause.Occur.SHOULD);
+
+    indexSearcher.search(bq, new Collector() {
+        boolean sawFive;
+        @Override
+        public void setNextReader(AtomicReaderContext context) {
+        }
+        @Override
+        public void collect(int docID) {
+          // Hairy / evil (depends on how BooleanScorer
+          // stores temporarily collected docIDs by
+          // appending to head of linked list):
+          if (docID == 5) {
+            sawFive = true;
+          } else if (docID == 1) {
+            assertFalse("optimized bulkScorer was not used for join query embedded in boolean query!", sawFive);
+          }
+        }
+        @Override
+        public void setScorer(Scorer scorer) {
+        }
+        @Override
+        public boolean acceptsDocsOutOfOrder() {
+          return true;
+        }
+      });
 
     indexSearcher.getIndexReader().close();
     dir.close();
@@ -353,8 +463,8 @@ public class TestJoinUtil extends LuceneTestCase {
         assertEquals(expectedTopDocs.getMaxScore(), actualTopDocs.getMaxScore(), 0.0f);
         for (int i = 0; i < expectedTopDocs.scoreDocs.length; i++) {
           if (VERBOSE) {
-            System.out.printf("Expected doc: %d | Actual doc: %d\n", expectedTopDocs.scoreDocs[i].doc, actualTopDocs.scoreDocs[i].doc);
-            System.out.printf("Expected score: %f | Actual score: %f\n", expectedTopDocs.scoreDocs[i].score, actualTopDocs.scoreDocs[i].score);
+            System.out.printf(Locale.ENGLISH, "Expected doc: %d | Actual doc: %d\n", expectedTopDocs.scoreDocs[i].doc, actualTopDocs.scoreDocs[i].doc);
+            System.out.printf(Locale.ENGLISH, "Expected score: %f | Actual score: %f\n", expectedTopDocs.scoreDocs[i].score, actualTopDocs.scoreDocs[i].score);
           }
           assertEquals(expectedTopDocs.scoreDocs[i].doc, actualTopDocs.scoreDocs[i].doc);
           assertEquals(expectedTopDocs.scoreDocs[i].score, actualTopDocs.scoreDocs[i].score, 0.0f);
@@ -375,7 +485,7 @@ public class TestJoinUtil extends LuceneTestCase {
     IndexIterationContext context = new IndexIterationContext();
     int numRandomValues = nDocs / 2;
     context.randomUniqueValues = new String[numRandomValues];
-    Set<String> trackSet = new HashSet<String>();
+    Set<String> trackSet = new HashSet<>();
     context.randomFrom = new boolean[numRandomValues];
     for (int i = 0; i < numRandomValues; i++) {
       String uniqueRandomValue;
@@ -463,7 +573,7 @@ public class TestJoinUtil extends LuceneTestCase {
         toField = "from";
         queryVals = context.toHitsToJoinScore;
       }
-      final Map<BytesRef, JoinScore> joinValueToJoinScores = new HashMap<BytesRef, JoinScore>();
+      final Map<BytesRef, JoinScore> joinValueToJoinScores = new HashMap<>();
       if (multipleValuesPerDocument) {
         fromSearcher.search(new TermQuery(new Term("value", uniqueRandomValue)), new Collector() {
 
@@ -541,7 +651,7 @@ public class TestJoinUtil extends LuceneTestCase {
         });
       }
 
-      final Map<Integer, JoinScore> docToJoinScore = new HashMap<Integer, JoinScore>();
+      final Map<Integer, JoinScore> docToJoinScore = new HashMap<>();
       if (multipleValuesPerDocument) {
         if (scoreDocsInOrder) {
           AtomicReader slowCompositeReader = SlowCompositeReaderWrapper.wrap(toSearcher.getIndexReader());
@@ -549,7 +659,7 @@ public class TestJoinUtil extends LuceneTestCase {
           if (terms != null) {
             DocsEnum docsEnum = null;
             TermsEnum termsEnum = null;
-            SortedSet<BytesRef> joinValues = new TreeSet<BytesRef>(BytesRef.getUTF8SortedAsUnicodeComparator());
+            SortedSet<BytesRef> joinValues = new TreeSet<>(BytesRef.getUTF8SortedAsUnicodeComparator());
             joinValues.addAll(joinValueToJoinScores.keySet());
             for (BytesRef joinValue : joinValues) {
               termsEnum = terms.iterator(termsEnum);
@@ -654,7 +764,7 @@ public class TestJoinUtil extends LuceneTestCase {
     } else {
       hitsToJoinScores = context.toHitsToJoinScore.get(queryValue);
     }
-    List<Map.Entry<Integer,JoinScore>> hits = new ArrayList<Map.Entry<Integer, JoinScore>>(hitsToJoinScores.entrySet());
+    List<Map.Entry<Integer,JoinScore>> hits = new ArrayList<>(hitsToJoinScores.entrySet());
     Collections.sort(hits, new Comparator<Map.Entry<Integer, JoinScore>>() {
 
       @Override
@@ -717,13 +827,13 @@ public class TestJoinUtil extends LuceneTestCase {
 
     String[] randomUniqueValues;
     boolean[] randomFrom;
-    Map<String, List<RandomDoc>> fromDocuments = new HashMap<String, List<RandomDoc>>();
-    Map<String, List<RandomDoc>> toDocuments = new HashMap<String, List<RandomDoc>>();
-    Map<String, List<RandomDoc>> randomValueFromDocs = new HashMap<String, List<RandomDoc>>();
-    Map<String, List<RandomDoc>> randomValueToDocs = new HashMap<String, List<RandomDoc>>();
+    Map<String, List<RandomDoc>> fromDocuments = new HashMap<>();
+    Map<String, List<RandomDoc>> toDocuments = new HashMap<>();
+    Map<String, List<RandomDoc>> randomValueFromDocs = new HashMap<>();
+    Map<String, List<RandomDoc>> randomValueToDocs = new HashMap<>();
 
-    Map<String, Map<Integer, JoinScore>> fromHitsToJoinScore = new HashMap<String, Map<Integer, JoinScore>>();
-    Map<String, Map<Integer, JoinScore>> toHitsToJoinScore = new HashMap<String, Map<Integer, JoinScore>>();
+    Map<String, Map<Integer, JoinScore>> fromHitsToJoinScore = new HashMap<>();
+    Map<String, Map<Integer, JoinScore>> toHitsToJoinScore = new HashMap<>();
 
   }
 
@@ -737,7 +847,7 @@ public class TestJoinUtil extends LuceneTestCase {
     private RandomDoc(String id, int numberOfLinkValues, String value, boolean from) {
       this.id = id;
       this.from = from;
-      linkValues = new ArrayList<String>(numberOfLinkValues);
+      linkValues = new ArrayList<>(numberOfLinkValues);
       this.value = value;
     }
   }

@@ -155,7 +155,7 @@ public final class CompoundFileDirectory extends BaseDirectory {
         entriesStream = dir.openInput(entriesFileName, IOContext.READONCE);
         CodecUtil.checkHeader(entriesStream, CompoundFileWriter.ENTRY_CODEC, CompoundFileWriter.VERSION_START, CompoundFileWriter.VERSION_START);
         final int numEntries = entriesStream.readVInt();
-        mapping = new HashMap<String,FileEntry>(numEntries);
+        mapping = new HashMap<>(numEntries);
         for (int i = 0; i < numEntries; i++) {
           final FileEntry fileEntry = new FileEntry();
           final String id = entriesStream.readString();
@@ -165,6 +165,9 @@ public final class CompoundFileDirectory extends BaseDirectory {
           }
           fileEntry.offset = entriesStream.readLong();
           fileEntry.length = entriesStream.readLong();
+        }
+        if (entriesStream.getFilePointer() != entriesStream.length()) {
+          throw new CorruptIndexException("did not read all bytes from file \"" + entriesFileName + "\": read " + entriesStream.getFilePointer() + " vs size " + entriesStream.length() + " (resource: " + entriesStream + ")");
         }
       } else {
         // TODO remove once 3.x is not supported anymore
@@ -182,7 +185,7 @@ public final class CompoundFileDirectory extends BaseDirectory {
 
   private static Map<String, FileEntry> readLegacyEntries(IndexInput stream,
       int firstInt) throws CorruptIndexException, IOException {
-    final Map<String,FileEntry> entries = new HashMap<String,FileEntry>();
+    final Map<String,FileEntry> entries = new HashMap<>();
     final int count;
     final boolean stripSegmentName;
     if (firstInt < CompoundFileWriter.FORMAT_PRE_VERSION) {

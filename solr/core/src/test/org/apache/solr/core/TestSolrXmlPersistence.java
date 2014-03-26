@@ -410,15 +410,10 @@ public class TestSolrXmlPersistence extends SolrTestCaseJ4 {
     SolrXMLCoresLocator.NonPersistingLocator locator
         = (SolrXMLCoresLocator.NonPersistingLocator) cores.getCoresLocator();
 
-    String instDir = null;
-    {
-      SolrCore template = null;
-      try {
-        template = cores.getCore("collection1");
-        instDir = template.getCoreDescriptor().getRawInstanceDir();
-      } finally {
-        if (null != template) template.close();
-      }
+    String instDir;
+    try (SolrCore template = cores.getCore("collection1")) {
+      assertNotNull(template);
+      instDir = template.getCoreDescriptor().getRawInstanceDir();
     }
 
     final File instDirFile = new File(cores.getSolrHome(), instDir);
@@ -497,7 +492,7 @@ public class TestSolrXmlPersistence extends SolrTestCaseJ4 {
 
 
   private String[] getAllNodes(InputStream is) throws ParserConfigurationException, IOException, SAXException {
-    List<String> expressions = new ArrayList<String>(); // XPATH and value for all elements in the indicated XML
+    List<String> expressions = new ArrayList<>(); // XPATH and value for all elements in the indicated XML
     DocumentBuilderFactory docBuilderFactory = DocumentBuilderFactory
         .newInstance();
     DocumentBuilder docBuilder = docBuilderFactory.newDocumentBuilder();

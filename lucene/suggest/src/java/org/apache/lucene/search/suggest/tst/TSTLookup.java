@@ -20,6 +20,7 @@ package org.apache.lucene.search.suggest.tst;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import org.apache.lucene.search.suggest.InputIterator;
 import org.apache.lucene.search.suggest.Lookup;
@@ -55,6 +56,9 @@ public class TSTLookup extends Lookup {
     if (tfit.hasPayloads()) {
       throw new IllegalArgumentException("this suggester doesn't support payloads");
     }
+    if (tfit.hasContexts()) {
+      throw new IllegalArgumentException("this suggester doesn't support contexts");
+    }
     root = new TernaryTreeNode();
     // buffer first
     if (tfit.getComparator() != BytesRef.getUTF8SortedAsUTF16Comparator()) {
@@ -62,8 +66,8 @@ public class TSTLookup extends Lookup {
       tfit = new SortedInputIterator(tfit, BytesRef.getUTF8SortedAsUTF16Comparator());
     }
 
-    ArrayList<String> tokens = new ArrayList<String>();
-    ArrayList<Number> vals = new ArrayList<Number>();
+    ArrayList<String> tokens = new ArrayList<>();
+    ArrayList<Number> vals = new ArrayList<>();
     BytesRef spare;
     CharsRef charsSpare = new CharsRef();
     while ((spare = tfit.next()) != null) {
@@ -118,9 +122,12 @@ public class TSTLookup extends Lookup {
   }
 
   @Override
-  public List<LookupResult> lookup(CharSequence key, boolean onlyMorePopular, int num) {
+  public List<LookupResult> lookup(CharSequence key, Set<BytesRef> contexts, boolean onlyMorePopular, int num) {
+    if (contexts != null) {
+      throw new IllegalArgumentException("this suggester doesn't support contexts");
+    }
     List<TernaryTreeNode> list = autocomplete.prefixCompletion(root, key, 0);
-    List<LookupResult> res = new ArrayList<LookupResult>();
+    List<LookupResult> res = new ArrayList<>();
     if (list == null || list.size() == 0) {
       return res;
     }

@@ -20,6 +20,7 @@ package org.apache.lucene.store;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.util.Arrays;
 
 import org.apache.lucene.store.MockDirectoryWrapper.Throttling;
@@ -73,7 +74,7 @@ public class TestDirectory extends LuceneTestCase {
             //System.out.println("create:" + fileName);
             IndexOutput output = dir.createOutput(fileName, newIOContext(random()));
             output.close();
-            assertTrue(dir.fileExists(fileName));
+            assertTrue(slowFileExists(dir, fileName));
           } catch (IOException e) {
             throw new RuntimeException(e);
           }
@@ -98,7 +99,7 @@ public class TestDirectory extends LuceneTestCase {
              try {
               IndexInput input = dir.openInput(file, newIOContext(random()));
               input.close();
-              } catch (FileNotFoundException e) {
+              } catch (FileNotFoundException | NoSuchFileException e) {
                 // ignore
               } catch (IOException e) {
                 if (e.getMessage().contains("still open for writing")) {
@@ -159,7 +160,7 @@ public class TestDirectory extends LuceneTestCase {
       for (int j=0; j<dirs.length; j++) {
         FSDirectory d2 = dirs[j];
         d2.ensureOpen();
-        assertTrue(d2.fileExists(fname));
+        assertTrue(slowFileExists(d2, fname));
         assertEquals(1 + largeBuffer.length, d2.fileLength(fname));
 
         // don't do read tests if unmapping is not supported!
@@ -185,7 +186,7 @@ public class TestDirectory extends LuceneTestCase {
 
       for (int j=0; j<dirs.length; j++) {
         FSDirectory d2 = dirs[j];
-        assertFalse(d2.fileExists(fname));
+        assertFalse(slowFileExists(d2, fname));
       }
 
       Lock lock = dir.makeLock(lockname);
@@ -247,7 +248,7 @@ public class TestDirectory extends LuceneTestCase {
     String name = "file";
     try {
       dir.createOutput(name, newIOContext(random())).close();
-      assertTrue(dir.fileExists(name));
+      assertTrue(slowFileExists(dir, name));
       assertTrue(Arrays.asList(dir.listAll()).contains(name));
     } finally {
       dir.close();
@@ -274,7 +275,7 @@ public class TestDirectory extends LuceneTestCase {
     try {
       IndexOutput out = fsDir.createOutput("afile", newIOContext(random()));
       out.close();
-      assertTrue(fsDir.fileExists("afile"));
+      assertTrue(slowFileExists(fsDir, "afile"));
       try {
         new SimpleFSDirectory(new File(path, "afile"), null);
         fail("did not hit expected exception");

@@ -66,7 +66,7 @@ public abstract class QueryParserBase extends QueryBuilder implements CommonQuer
   MultiTermQuery.RewriteMethod multiTermRewriteMethod = MultiTermQuery.CONSTANT_SCORE_AUTO_REWRITE_DEFAULT;
   boolean allowLeadingWildcard = false;
 
-  String field;
+  protected String field;
   int phraseSlop = 0;
   float fuzzyMinSim = FuzzyQuery.defaultMinSimilarity;
   int fuzzyPrefixLength = FuzzyQuery.defaultPrefixLength;
@@ -356,7 +356,7 @@ public abstract class QueryParserBase extends QueryBuilder implements CommonQuer
 
     if (fieldToDateResolution == null) {
       // lazily initialize HashMap
-      fieldToDateResolution = new HashMap<String,DateTools.Resolution>();
+      fieldToDateResolution = new HashMap<>();
     }
 
     fieldToDateResolution.put(fieldName, dateResolution);

@@ -18,6 +18,7 @@ package org.apache.lucene.util;
  */
 
 import java.io.*;
+import java.nio.file.NoSuchFileException;
 import java.lang.annotation.*;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
@@ -321,11 +322,11 @@ public abstract class LuceneTestCase extends Assert {
   /** All {@link Directory} implementations. */
   private static final List<String> CORE_DIRECTORIES;
   static {
-    CORE_DIRECTORIES = new ArrayList<String>(FS_DIRECTORIES);
+    CORE_DIRECTORIES = new ArrayList<>(FS_DIRECTORIES);
     CORE_DIRECTORIES.add("RAMDirectory");
   };
   
-  protected static final Set<String> doesntSupportOffsets = new HashSet<String>(Arrays.asList( 
+  protected static final Set<String> doesntSupportOffsets = new HashSet<>(Arrays.asList(
     "Lucene3x",
     "MockFixedIntBlock",
     "MockVariableIntBlock",
@@ -393,7 +394,7 @@ public abstract class LuceneTestCase extends Assert {
     }
 
     ignoreAfterMaxFailuresDelegate = 
-        new AtomicReference<TestRuleIgnoreAfterMaxFailures>(
+        new AtomicReference<>(
             new TestRuleIgnoreAfterMaxFailures(maxFailures));
     ignoreAfterMaxFailures = TestRuleDelegate.of(ignoreAfterMaxFailuresDelegate);
   }
@@ -415,7 +416,7 @@ public abstract class LuceneTestCase extends Assert {
 
   /** By-name list of ignored types like loggers etc. */
   private final static Set<String> STATIC_LEAK_IGNORED_TYPES = 
-      Collections.unmodifiableSet(new HashSet<String>(Arrays.asList(
+      Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
       "org.slf4j.Logger",
       "org.apache.solr.SolrLogFormatter",
       EnumSet.class.getName())));
@@ -690,8 +691,9 @@ public abstract class LuceneTestCase extends Assert {
    * Return <code>args</code> as a {@link Set} instance. The order of elements is not
    * preserved in iterators.
    */
+  @SafeVarargs @SuppressWarnings("varargs")
   public static <T> Set<T> asSet(T... args) {
-    return new HashSet<T>(Arrays.asList(args));
+    return new HashSet<>(Arrays.asList(args));
   }
 
   /**
@@ -1217,13 +1219,13 @@ public abstract class LuceneTestCase extends Assert {
             break;
           case 3:
             final AtomicReader ar = SlowCompositeReaderWrapper.wrap(r);
-            final List<String> allFields = new ArrayList<String>();
+            final List<String> allFields = new ArrayList<>();
             for (FieldInfo fi : ar.getFieldInfos()) {
               allFields.add(fi.name);
             }
             Collections.shuffle(allFields, random);
             final int end = allFields.isEmpty() ? 0 : random.nextInt(allFields.size());
-            final Set<String> fields = new HashSet<String>(allFields.subList(0, end));
+            final Set<String> fields = new HashSet<>(allFields.subList(0, end));
             // will create no FC insanity as ParallelAtomicReader has own cache key:
             r = new ParallelAtomicReader(
               new FieldFilterAtomicReader(ar, fields, false),
@@ -1758,7 +1760,7 @@ public abstract class LuceneTestCase extends Assert {
     Random random = random();
 
     // collect this number of terms from the left side
-    HashSet<BytesRef> tests = new HashSet<BytesRef>();
+    HashSet<BytesRef> tests = new HashSet<>();
     int numPasses = 0;
     while (numPasses < 10 && tests.size() < numTests) {
       leftEnum = leftTerms.iterator(leftEnum);
@@ -1801,7 +1803,7 @@ public abstract class LuceneTestCase extends Assert {
 
     rightEnum = rightTerms.iterator(rightEnum);
 
-    ArrayList<BytesRef> shuffledTests = new ArrayList<BytesRef>(tests);
+    ArrayList<BytesRef> shuffledTests = new ArrayList<>(tests);
     Collections.shuffle(shuffledTests, random);
 
     for (BytesRef b : shuffledTests) {
@@ -1920,7 +1922,7 @@ public abstract class LuceneTestCase extends Assert {
   }
 
   private static Set<String> getDVFields(IndexReader reader) {
-    Set<String> fields = new HashSet<String>();
+    Set<String> fields = new HashSet<>();
     for(FieldInfo fi : MultiFields.getMergedFieldInfos(reader)) {
       if (fi.hasDocValues()) {
         fields.add(fi.name);
@@ -2073,8 +2075,8 @@ public abstract class LuceneTestCase extends Assert {
     FieldInfos rightInfos = MultiFields.getMergedFieldInfos(rightReader);
     
     // TODO: would be great to verify more than just the names of the fields!
-    TreeSet<String> left = new TreeSet<String>();
-    TreeSet<String> right = new TreeSet<String>();
+    TreeSet<String> left = new TreeSet<>();
+    TreeSet<String> right = new TreeSet<>();
     
     for (FieldInfo fi : leftInfos) {
       left.add(fi.name);
@@ -2085,5 +2087,18 @@ public abstract class LuceneTestCase extends Assert {
     }
     
     assertEquals(info, left, right);
+  }
+
+  /** Returns true if the file exists (can be opened), false
+   *  if it cannot be opened, and (unlike Java's
+   *  File.exists) throws IOException if there's some
+   *  unexpected error. */
+  public static boolean slowFileExists(Directory dir, String fileName) throws IOException {
+    try {
+      dir.openInput(fileName, IOContext.DEFAULT).close();
+      return true;
+    } catch (NoSuchFileException | FileNotFoundException e) {
+      return false;
+    }
   }
 }

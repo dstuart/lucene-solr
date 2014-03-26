@@ -47,7 +47,7 @@ class ConjunctionScorer extends Scorer {
     ArrayUtil.timSort(docsAndFreqs, new Comparator<DocsAndFreqs>() {
       @Override
       public int compare(DocsAndFreqs o1, DocsAndFreqs o2) {
-        return Long.signum(o1.cost - o2.cost);
+        return Long.compare(o1.cost, o2.cost);
       }
     });
 
@@ -122,7 +122,7 @@ class ConjunctionScorer extends Scorer {
 
   @Override
   public Collection<ChildScorer> getChildren() {
-    ArrayList<ChildScorer> children = new ArrayList<ChildScorer>(docsAndFreqs.length);
+    ArrayList<ChildScorer> children = new ArrayList<>(docsAndFreqs.length);
     for (DocsAndFreqs docs : docsAndFreqs) {
       children.add(new ChildScorer(docs.scorer, "MUST"));
     }

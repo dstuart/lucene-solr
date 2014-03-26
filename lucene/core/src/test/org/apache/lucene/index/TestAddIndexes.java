@@ -19,6 +19,7 @@ package org.apache.lucene.index;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -652,7 +653,7 @@ public class TestAddIndexes extends LuceneTestCase {
     Directory dir, dir2;
     final static int NUM_INIT_DOCS = 17;
     IndexWriter writer2;
-    final List<Throwable> failures = new ArrayList<Throwable>();
+    final List<Throwable> failures = new ArrayList<>();
     volatile boolean didClose;
     final IndexReader[] readers;
     final int NUM_COPY;
@@ -890,7 +891,7 @@ public class TestAddIndexes extends LuceneTestCase {
 
       if (t instanceof AlreadyClosedException || t instanceof MergePolicy.MergeAbortedException || t instanceof NullPointerException) {
         report = !didClose;
-      } else if (t instanceof FileNotFoundException)  {
+      } else if (t instanceof FileNotFoundException || t instanceof NoSuchFileException)  {
         report = !didClose;
       } else if (t instanceof IOException)  {
         Throwable t2 = t.getCause();
