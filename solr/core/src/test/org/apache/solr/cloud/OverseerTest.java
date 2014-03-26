@@ -43,6 +43,7 @@ import org.apache.solr.common.cloud.Slice;
 import org.apache.solr.common.cloud.SolrZkClient;
 import org.apache.solr.common.cloud.ZkNodeProps;
 import org.apache.solr.common.cloud.ZkStateReader;
+import org.apache.solr.handler.admin.CollectionsHandler;
 import org.apache.solr.handler.component.HttpShardHandlerFactory;
 import org.apache.solr.util.DefaultSolrThreadFactory;
 import org.apache.zookeeper.CreateMode;
@@ -61,8 +62,8 @@ public class OverseerTest extends SolrTestCaseJ4 {
   static final int TIMEOUT = 10000;
   private static final boolean DEBUG = false;
   
-  private List<Overseer> overseers = new ArrayList<Overseer>();
-  private List<ZkStateReader> readers = new ArrayList<ZkStateReader>();
+  private List<Overseer> overseers = new ArrayList<>();
+  private List<ZkStateReader> readers = new ArrayList<>();
   
   private String collection = "collection1";
   
@@ -435,7 +436,7 @@ public class OverseerTest extends SolrTestCaseJ4 {
       assertEquals("Unable to verify all cores have been returned an id", 
                    coreCount, assignedCount);
       
-      final HashMap<String, AtomicInteger> counters = new HashMap<String,AtomicInteger>();
+      final HashMap<String, AtomicInteger> counters = new HashMap<>();
       for (int i = 1; i < sliceCount+1; i++) {
         counters.put("shard" + i, new AtomicInteger());
       }
@@ -912,7 +913,7 @@ public class OverseerTest extends SolrTestCaseJ4 {
       reader = new ZkStateReader(zkClient);
       reader.createClusterStateWatchersAndUpdate();
       //prepopulate work queue with some items to emulate previous overseer died before persisting state
-      DistributedQueue queue = Overseer.getInternalQueue(zkClient);
+      DistributedQueue queue = Overseer.getInternalQueue(zkClient, new Overseer.Stats());
       ZkNodeProps m = new ZkNodeProps(Overseer.QUEUE_OPERATION, "state",
           ZkStateReader.BASE_URL_PROP, "http://127.0.0.1/solr",
           ZkStateReader.NODE_NAME_PROP, "node1",

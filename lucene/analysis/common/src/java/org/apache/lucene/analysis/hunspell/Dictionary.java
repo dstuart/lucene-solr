@@ -27,6 +27,8 @@ import org.apache.lucene.util.IntsRef;
 import org.apache.lucene.util.OfflineSorter;
 import org.apache.lucene.util.OfflineSorter.ByteSequencesReader;
 import org.apache.lucene.util.OfflineSorter.ByteSequencesWriter;
+import org.apache.lucene.util.automaton.CharacterRunAutomaton;
+import org.apache.lucene.util.automaton.RegExp;
 import org.apache.lucene.util.fst.Builder;
 import org.apache.lucene.util.fst.CharSequenceOutputs;
 import org.apache.lucene.util.fst.FST;
@@ -35,12 +37,16 @@ import org.apache.lucene.util.fst.Outputs;
 import org.apache.lucene.util.fst.Util;
 
 import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.LineNumberReader;
+import java.io.OutputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
@@ -50,10 +56,12 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -78,17 +86,16 @@ public class Dictionary {
   private static final String UTF8_FLAG_TYPE = "UTF-8";
   private static final String LONG_FLAG_TYPE = "long";
   
+  // TODO: really for suffixes we should reverse the automaton and run them backwards
   private static final String PREFIX_CONDITION_REGEX_PATTERN = "%s.*";
   private static final String SUFFIX_CONDITION_REGEX_PATTERN = ".*%s";
 
   FST<IntsRef> prefixes;
   FST<IntsRef> suffixes;
   
-  // all Patterns used by prefixes and suffixes. these are typically re-used across
+  // all condition checks used by prefixes and suffixes. these are typically re-used across
   // many affix stripping rules. so these are deduplicated, to save RAM.
-  // TODO: maybe don't use Pattern for the condition check...
-  // TODO: when we cut over Affix to FST, just store integer index to this.
-  ArrayList<Pattern> patterns = new ArrayList<>();
+  ArrayList<CharacterRunAutomaton> patterns = new ArrayList<>();
   
   // the entries in the .dic file, mapping to their set of flags.
   // the fst output is the ordinal list for flagLookup
@@ -98,7 +105,8 @@ public class Dictionary {
   BytesRefHash flagLookup = new BytesRefHash();
   
   // the list of unique strip affixes.
-  BytesRefHash stripLookup = new BytesRefHash();
+  char[] stripData;
+  int[] stripOffsets;
   
   // 8 bytes per affix
   byte[] affixData = new byte[64];
@@ -113,6 +121,7 @@ public class Dictionary {
   
   boolean ignoreCase;
   boolean complexPrefixes;
+  boolean twoStageAffix; // if no affixes have continuation classes, no need to do 2-level affix stripping
   
   int circumfix = -1; // circumfix flag, or -1 if one is not defined
   
@@ -154,21 +163,40 @@ public class Dictionary {
     this.ignoreCase = ignoreCase;
     this.needsInputCleaning = ignoreCase;
     this.needsOutputCleaning = false; // set if we have an OCONV
-    // TODO: we really need to probably buffer this on disk since so many newer dictionaries
-    // (en_GB, hu_HU, etc) now have tons of AM lines (morph metadata) etc before they finally declare 
-    // their encoding... but for now this large buffer is a workaround
-    BufferedInputStream buffered = new BufferedInputStream(affix, 65536);
-    buffered.mark(65536);
-    String encoding = getDictionaryEncoding(buffered);
-    buffered.reset();
-    CharsetDecoder decoder = getJavaEncoding(encoding);
-    readAffixFile(buffered, decoder);
     flagLookup.add(new BytesRef()); // no flags -> ord 0
-    stripLookup.add(new BytesRef()); // no strip -> ord 0
-    IntSequenceOutputs o = IntSequenceOutputs.getSingleton();
-    Builder<IntsRef> b = new Builder<IntsRef>(FST.INPUT_TYPE.BYTE4, o);
-    readDictionaryFiles(dictionaries, decoder, b);
-    words = b.finish();
+
+    File aff = File.createTempFile("affix", "aff", tempDir);
+    OutputStream out = new BufferedOutputStream(new FileOutputStream(aff));
+    InputStream aff1 = null;
+    InputStream aff2 = null;
+    try {
+      // copy contents of affix stream to temp file
+      final byte [] buffer = new byte [1024 * 8];
+      int len;
+      while ((len = affix.read(buffer)) > 0) {
+        out.write(buffer, 0, len);
+      }
+      out.close();
+      
+      // pass 1: get encoding
+      aff1 = new BufferedInputStream(new FileInputStream(aff));
+      String encoding = getDictionaryEncoding(aff1);
+      
+      // pass 2: parse affixes
+      CharsetDecoder decoder = getJavaEncoding(encoding);
+      aff2 = new BufferedInputStream(new FileInputStream(aff));
+      readAffixFile(aff2, decoder);
+      
+      // read dictionary entries
+      IntSequenceOutputs o = IntSequenceOutputs.getSingleton();
+      Builder<IntsRef> b = new Builder<>(FST.INPUT_TYPE.BYTE4, o);
+      readDictionaryFiles(dictionaries, decoder, b);
+      words = b.finish();
+      aliases = null; // no longer needed
+    } finally {
+      IOUtils.closeWhileHandlingException(out, aff1, aff2);
+      aff.delete();
+    }
   }
 
   /**
@@ -247,16 +275,28 @@ public class Dictionary {
     TreeMap<String, List<Character>> prefixes = new TreeMap<>();
     TreeMap<String, List<Character>> suffixes = new TreeMap<>();
     Map<String,Integer> seenPatterns = new HashMap<>();
+    
+    // zero condition -> 0 ord
+    seenPatterns.put(".*", 0);
+    patterns.add(null);
+    
+    // zero strip -> 0 ord
+    Map<String,Integer> seenStrips = new LinkedHashMap<>();
+    seenStrips.put("", 0);
 
     LineNumberReader reader = new LineNumberReader(new InputStreamReader(affixStream, decoder));
     String line = null;
     while ((line = reader.readLine()) != null) {
+      // ignore any BOM marker on first line
+      if (reader.getLineNumber() == 1 && line.startsWith("\uFEFF")) {
+        line = line.substring(1);
+      }
       if (line.startsWith(ALIAS_KEY)) {
         parseAlias(line);
       } else if (line.startsWith(PREFIX_KEY)) {
-        parseAffix(prefixes, line, reader, PREFIX_CONDITION_REGEX_PATTERN, seenPatterns);
+        parseAffix(prefixes, line, reader, PREFIX_CONDITION_REGEX_PATTERN, seenPatterns, seenStrips);
       } else if (line.startsWith(SUFFIX_KEY)) {
-        parseAffix(suffixes, line, reader, SUFFIX_CONDITION_REGEX_PATTERN, seenPatterns);
+        parseAffix(suffixes, line, reader, SUFFIX_CONDITION_REGEX_PATTERN, seenPatterns, seenStrips);
       } else if (line.startsWith(FLAG_KEY)) {
         // Assume that the FLAG line comes before any prefix or suffixes
         // Store the strategy so it can be used when parsing the dic file
@@ -297,6 +337,22 @@ public class Dictionary {
     
     this.prefixes = affixFST(prefixes);
     this.suffixes = affixFST(suffixes);
+    
+    int totalChars = 0;
+    for (String strip : seenStrips.keySet()) {
+      totalChars += strip.length();
+    }
+    stripData = new char[totalChars];
+    stripOffsets = new int[seenStrips.size()+1];
+    int currentOffset = 0;
+    int currentIndex = 0;
+    for (String strip : seenStrips.keySet()) {
+      stripOffsets[currentIndex++] = currentOffset;
+      strip.getChars(0, strip.length(), stripData, currentOffset);
+      currentOffset += strip.length();
+    }
+    assert currentIndex == seenStrips.size();
+    stripOffsets[currentIndex] = currentOffset;
   }
   
   private FST<IntsRef> affixFST(TreeMap<String,List<Character>> affixes) throws IOException {
@@ -331,7 +387,8 @@ public class Dictionary {
                           String header,
                           LineNumberReader reader,
                           String conditionPattern,
-                          Map<String,Integer> seenPatterns) throws IOException, ParseException {
+                          Map<String,Integer> seenPatterns,
+                          Map<String,Integer> seenStrips) throws IOException, ParseException {
     
     BytesRef scratch = new BytesRef();
     StringBuilder sb = new StringBuilder();
@@ -348,8 +405,10 @@ public class Dictionary {
       String line = reader.readLine();
       String ruleArgs[] = line.split("\\s+");
 
-      if (ruleArgs.length < 5) {
-          throw new ParseException("The affix file contains a rule with less than five elements", reader.getLineNumber());
+      // from the manpage: PFX flag stripping prefix [condition [morphological_fields...]]
+      // condition is optional
+      if (ruleArgs.length < 4) {
+          throw new ParseException("The affix file contains a rule with less than four elements: " + line, reader.getLineNumber());
       }
       
       char flag = flagParsingStrategy.parseFlag(ruleArgs[1]);
@@ -368,9 +427,12 @@ public class Dictionary {
         
         appendFlags = flagParsingStrategy.parseFlags(flagPart);
         Arrays.sort(appendFlags);
+        twoStageAffix = true;
       }
+      
+      // TODO: add test and fix zero-affix handling!
 
-      String condition = ruleArgs[4];
+      String condition = ruleArgs.length > 4 ? ruleArgs[4] : ".";
       // at least the gascon affix file has this issue
       if (condition.startsWith("[") && !condition.endsWith("]")) {
         condition = condition + "]";
@@ -380,7 +442,16 @@ public class Dictionary {
         condition = condition.replace("-", "\\-");
       }
 
-      String regex = String.format(Locale.ROOT, conditionPattern, condition);
+      final String regex;
+      if (".".equals(condition)) {
+        regex = ".*"; // Zero condition is indicated by dot
+      } else if (condition.equals(strip)) {
+        regex = ".*"; // TODO: optimize this better:
+                      // if we remove 'strip' from condition, we don't have to append 'strip' to check it...!
+                      // but this is complicated...
+      } else {
+        regex = String.format(Locale.ROOT, conditionPattern, condition);
+      }
       
       // deduplicate patterns
       Integer patternIndex = seenPatterns.get(regex);
@@ -390,17 +461,17 @@ public class Dictionary {
           throw new UnsupportedOperationException("Too many patterns, please report this to dev@lucene.apache.org");          
         }
         seenPatterns.put(regex, patternIndex);
-        Pattern pattern = Pattern.compile(regex);
+        CharacterRunAutomaton pattern = new CharacterRunAutomaton(new RegExp(regex, RegExp.NONE).toAutomaton());
         patterns.add(pattern);
       }
       
-      scratch.copyChars(strip);
-      int stripOrd = stripLookup.add(scratch);
-      if (stripOrd < 0) {
-        // already exists in our hash
-        stripOrd = (-stripOrd)-1;
-      } else if (stripOrd > Character.MAX_VALUE) {
-        throw new UnsupportedOperationException("Too many unique strips, please report this to dev@lucene.apache.org");
+      Integer stripOrd = seenStrips.get(strip);
+      if (stripOrd == null) {
+        stripOrd = seenStrips.size();
+        seenStrips.put(strip, stripOrd);
+        if (stripOrd > Character.MAX_VALUE) {
+          throw new UnsupportedOperationException("Too many unique strips, please report this to dev@lucene.apache.org");
+        }
       }
 
       if (appendFlags == null) {
@@ -418,7 +489,7 @@ public class Dictionary {
       }
       
       affixWriter.writeShort((short)flag);
-      affixWriter.writeShort((short)stripOrd);
+      affixWriter.writeShort((short)stripOrd.intValue());
       // encode crossProduct into patternIndex
       int patternOrd = patternIndex.intValue() << 1 | (crossProduct ? 1 : 0);
       affixWriter.writeShort((short)patternOrd);
@@ -431,7 +502,7 @@ public class Dictionary {
       
       List<Character> list = affixes.get(affixArg);
       if (list == null) {
-        list = new ArrayList<Character>();
+        list = new ArrayList<>();
         affixes.put(affixArg, list);
       }
       
@@ -464,6 +535,9 @@ public class Dictionary {
     
     return builder.finish();
   }
+  
+  /** pattern accepts optional BOM + SET + any whitespace */
+  final static Pattern ENCODING_PATTERN = Pattern.compile("^(\u00EF\u00BB\u00BF)?SET\\s+");
 
   /**
    * Parses the encoding specified in the affix file readable through the provided InputStream
@@ -473,7 +547,7 @@ public class Dictionary {
    * @throws IOException Can be thrown while reading from the InputStream
    * @throws ParseException Thrown if the first non-empty non-comment line read from the file does not adhere to the format {@code SET <encoding>}
    */
-  private String getDictionaryEncoding(InputStream affix) throws IOException, ParseException {
+  static String getDictionaryEncoding(InputStream affix) throws IOException, ParseException {
     final StringBuilder encoding = new StringBuilder();
     for (;;) {
       encoding.setLength(0);
@@ -496,9 +570,10 @@ public class Dictionary {
         }
         continue;
       }
-      if (encoding.length() > 4 && "SET ".equals(encoding.substring(0, 4))) {
-        // cleanup the encoding string, too (whitespace)
-        return encoding.substring(4).trim();
+      Matcher matcher = ENCODING_PATTERN.matcher(encoding);
+      if (matcher.find()) {
+        int last = matcher.end();
+        return encoding.substring(last).trim();
       }
     }
   }
@@ -536,8 +611,12 @@ public class Dictionary {
    * @param flagLine Line containing the flag information
    * @return FlagParsingStrategy that handles parsing flags in the way specified in the FLAG definition
    */
-  private FlagParsingStrategy getFlagParsingStrategy(String flagLine) {
-    String flagType = flagLine.substring(5);
+  static FlagParsingStrategy getFlagParsingStrategy(String flagLine) {
+    String parts[] = flagLine.split("\\s+");
+    if (parts.length != 2) {
+      throw new IllegalArgumentException("Illegal FLAG specification: " + flagLine);
+    }
+    String flagType = parts[1];
 
     if (NUM_FLAG_TYPE.equals(flagType)) {
       return new NumFlagParsingStrategy();
@@ -550,6 +629,24 @@ public class Dictionary {
     throw new IllegalArgumentException("Unknown flag type: " + flagType);
   }
 
+  final char FLAG_SEPARATOR = 0x1f; // flag separator after escaping
+  
+  String unescapeEntry(String entry) {
+    StringBuilder sb = new StringBuilder();
+    for (int i = 0; i < entry.length(); i++) {
+      char ch = entry.charAt(i);
+      if (ch == '\\' && i+1 < entry.length()) {
+        sb.append(entry.charAt(i+1));
+        i++;
+      } else if (ch == '/') {
+        sb.append(FLAG_SEPARATOR);
+      } else {
+        sb.append(ch);
+      }
+    }
+    return sb.toString();
+  }
+  
   /**
    * Reads the dictionary file through the provided InputStreams, building up the words map
    *
@@ -570,8 +667,9 @@ public class Dictionary {
         String line = lines.readLine(); // first line is number of entries (approximately, sometimes)
         
         while ((line = lines.readLine()) != null) {
+          line = unescapeEntry(line);
           if (needsInputCleaning) {
-            int flagSep = line.lastIndexOf('/');
+            int flagSep = line.lastIndexOf(FLAG_SEPARATOR);
             if (flagSep == -1) {
               CharSequence cleansed = cleanInput(line, sb);
               writer.write(cleansed.toString().getBytes(IOUtils.CHARSET_UTF_8));
@@ -604,7 +702,7 @@ public class Dictionary {
         scratch1.length = o1.length;
         
         for (int i = scratch1.length - 1; i >= 0; i--) {
-          if (scratch1.bytes[scratch1.offset + i] == '/') {
+          if (scratch1.bytes[scratch1.offset + i] == FLAG_SEPARATOR) {
             scratch1.length = i;
             break;
           }
@@ -615,7 +713,7 @@ public class Dictionary {
         scratch2.length = o2.length;
         
         for (int i = scratch2.length - 1; i >= 0; i--) {
-          if (scratch2.bytes[scratch2.offset + i] == '/') {
+          if (scratch2.bytes[scratch2.offset + i] == FLAG_SEPARATOR) {
             scratch2.length = i;
             break;
           }
@@ -648,7 +746,7 @@ public class Dictionary {
       String entry;
       char wordForm[];
       
-      int flagSep = line.lastIndexOf('/');
+      int flagSep = line.lastIndexOf(FLAG_SEPARATOR);
       if (flagSep == -1) {
         wordForm = NOFLAGS;
         entry = line;
@@ -707,6 +805,9 @@ public class Dictionary {
   }
   
   static char[] decodeFlags(BytesRef b) {
+    if (b.length == 0) {
+      return CharsRef.EMPTY_CHARS;
+    }
     int len = b.length >>> 1;
     char flags[] = new char[len];
     int upto = 0;
@@ -738,7 +839,9 @@ public class Dictionary {
       final int count = Integer.parseInt(ruleArgs[1]);
       aliases = new String[count];
     } else {
-      aliases[aliasCount++] = ruleArgs[1];
+      // an alias can map to no flags
+      String aliasValue = ruleArgs.length == 1 ? "" : ruleArgs[1];
+      aliases[aliasCount++] = aliasValue;
     }
   }
   
@@ -753,7 +856,7 @@ public class Dictionary {
   /**
    * Abstraction of the process of parsing flags taken from the affix and dic files
    */
-  private static abstract class FlagParsingStrategy {
+  static abstract class FlagParsingStrategy {
 
     /**
      * Parses the given String into a single flag
@@ -762,7 +865,11 @@ public class Dictionary {
      * @return Parsed flag
      */
     char parseFlag(String rawFlag) {
-      return parseFlags(rawFlag)[0];
+      char flags[] = parseFlags(rawFlag);
+      if (flags.length != 1) {
+        throw new IllegalArgumentException("expected only one flag, got: " + rawFlag);
+      }
+      return flags[0];
     }
 
     /**
@@ -828,6 +935,9 @@ public class Dictionary {
       }
 
       StringBuilder builder = new StringBuilder();
+      if (rawFlags.length() % 2 == 1) {
+        throw new IllegalArgumentException("Invalid flags (should be even number of characters): " + rawFlags);
+      }
       for (int i = 0; i < rawFlags.length(); i+=2) {
         char cookedFlag = (char) ((int) rawFlags.charAt(i) + (int) rawFlags.charAt(i + 1));
         builder.append(cookedFlag);

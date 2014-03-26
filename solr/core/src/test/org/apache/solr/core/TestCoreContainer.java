@@ -87,8 +87,6 @@ public class TestCoreContainer extends SolrTestCaseJ4 {
     System.setProperty("shareSchema", "true");
     final CoreContainer cores = init("_shareSchema");
     try {
-      assertTrue(cores.isShareSchema());
-      
       CoreDescriptor descriptor1 = new CoreDescriptor(cores, "core1", "./collection1");
       SolrCore core1 = cores.create(descriptor1);
       
@@ -130,7 +128,7 @@ public class TestCoreContainer extends SolrTestCaseJ4 {
         }
       }
 
-      List<Thread> threads = new ArrayList<Thread>();
+      List<Thread> threads = new ArrayList<>();
       int numThreads = 4;
       for (int i = 0; i < numThreads; i++) {
         threads.add(new TestThread());
